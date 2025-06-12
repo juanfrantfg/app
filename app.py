@@ -91,10 +91,17 @@ def globales_temp(df_jugadores, df_partidos, df_part_minutos, df_asistencias):
     asistencias = df_asistencias.groupby("jugador_id")["asiste"].mean().reset_index(name="asistencia_pct")
     rpe = df_asistencias.groupby("jugador_id")["rpe"].mean().reset_index(name="rpe_media")
     actitud = df_asistencias.groupby("jugador_id")["actitud"].mean().reset_index(name="actitud_media")
-    df = df_jugadores.merge(min_totales, left_on="id", right_on="jugador_id", how="left") \
-        .merge(asistencias, left_on="id", right_on="jugador_id", how="left") \
-        .merge(rpe, left_on="id", right_on="jugador_id", how="left") \
-        .merge(actitud, left_on="id", right_on="jugador_id", how="left")
+
+    df = df_jugadores.copy()
+    # Merge cada vez y elimina la columna duplicada 'jugador_id' después de cada merge
+    df = df.merge(min_totales, left_on="id", right_on="jugador_id", how="left")
+    df = df.drop(columns=["jugador_id"])
+    df = df.merge(asistencias, left_on="id", right_on="jugador_id", how="left")
+    df = df.drop(columns=["jugador_id"])
+    df = df.merge(rpe, left_on="id", right_on="jugador_id", how="left")
+    df = df.drop(columns=["jugador_id"])
+    df = df.merge(actitud, left_on="id", right_on="jugador_id", how="left")
+    df = df.drop(columns=["jugador_id"])
     df = df.fillna(0)
     return df
 
