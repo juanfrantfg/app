@@ -1,294 +1,172 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import mysql.connector
+import plotly.express as px
 
-st.set_page_config(page_title="Informes Fútbol Base", layout="wide")
+# CONFIGURAR AQUÍ TUS DATOS DE CONEXIÓN
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "",  # pon tu contraseña
+    "database": "apptfg"
+}
 
-# CONEXIÓN BD
-def get_connection():
-    return mysql.connector.connect(
-        host="185.14.58.24",
-        user="tfgusu",
-        password="t2V#zYufaA1^9crh",
-        database="apptfg"
-    )
-
-@st.cache_data
-def load_jugadores():
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM jugadores", conn)
+@st.cache_data(ttl=600)
+def load_data():
+    conn = mysql.connector.connect(**DB_CONFIG)
+    tablas = [
+        "equipos", "jugadores", "partidos", "convocatorias",
+        "part_accion", "part_titulares", "part_asistencias", "part_minutos",
+        "entrenamientos_registro", "asistencias"
+    ]
+    dfs = {}
+    for tabla in tablas:
+        try:
+            dfs[tabla] = pd.read_sql(f"SELECT * FROM {tabla}", conn)
+        except Exception as e:
+            st.warning(f"Error cargando {tabla}: {e}")
     conn.close()
+    return dfs
+
+def partidos_stats(df_partidos):
+    df = df_partidos.copy()
+    df["resultado"] = np.where(df["goles_favor"] > df["goles_contra"], "Ganado",
+                            np.where(df["goles_favor"] < df["goles_contra"], "Perdido", "Empatado"))
+    resumen = df.groupby("resultado").size().reset_index(name="cantidad")
+    return df, resumen
+
+def jugador_stats(df_jugadores, df_part_minutos, df_part_accion, df_convocatorias, df_partidos):
+    min_por_part = df_part_minutos.groupby(["jugador_id", "partido_id"])["minutos"].sum().reset_index()
+    goles = df_part_accion[df_part_accion["accion"] == "gol"].groupby("jugador_id").size().reset_index(name="goles")
+    asistencias = df_part_accion[df_part_accion["accion"] == "asistencia"].groupby("jugador_id").size().reset_index(name="asistencias")
+    lesiones = df_part_accion[df_part_accion["accion"] == "lesion"].groupby("jugador_id").size().reset_index(name="lesiones")
+    amarillas = df_part_accion[df_part_accion["accion"] == "amarilla"].groupby("jugador_id").size().reset_index(name="amarillas")
+    goles_encajados = df_part_accion[df_part_accion["accion"] == "gol_encajado"].groupby("jugador_id").size().reset_index(name="goles_encajados")
+    convocados = df_convocatorias.groupby("jugador_id").size().reset_index(name="convocatorias")
+    valoracion_media = df_convocatorias.groupby("jugador_id")["valoracion"].mean().reset_index(name="valoracion_media")
+    min_totales = min_por_part.groupby("jugador_id")["minutos"].sum().reset_index(name="minutos_totales")
+    partidos_jugados = min_por_part.groupby("jugador_id")["partido_id"].nunique().reset_index(name="partidos_jugados")
+    partido_min = df_partidos["id"].nunique() * 62
+    min_totales["porcentaje_min"] = 100 * min_totales["minutos_totales"] / partido_min
+
+    df = df_jugadores.merge(convocados, left_on="id", right_on="jugador_id", how="left") \
+        .merge(valoracion_media, on="jugador_id", how="left") \
+        .merge(min_totales, on="jugador_id", how="left") \
+        .merge(partidos_jugados, on="jugador_id", how="left") \
+        .merge(goles, on="jugador_id", how="left") \
+        .merge(asistencias, on="jugador_id", how="left") \
+        .merge(lesiones, on="jugador_id", how="left") \
+        .merge(amarillas, on="jugador_id", how="left") \
+        .merge(goles_encajados, on="jugador_id", how="left")
+    df = df.fillna(0)
     return df
 
-@st.cache_data
-def load_partidos():
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM partidos WHERE en_juego=9", conn)
-    conn.close()
+def equipo_stats(df_partidos):
+    df = df_partidos.copy()
+    resumen = df.groupby("equipo_id").agg({
+        "goles_favor":"sum",
+        "goles_contra":"sum",
+        "id":"count"
+    }).rename(columns={"id":"partidos"}).reset_index()
+    return resumen
+
+def asistencias_entreno_stats(df_asistencias, df_entrenamientos, df_convocatorias, df_partidos):
+    entreno_partido = []
+    for idx, row in df_entrenamientos.iterrows():
+        fecha = row["fecha"]
+        partido = df_partidos[df_partidos["fecha"] >= fecha].sort_values("fecha").head(1)
+        if not partido.empty:
+            entreno_partido.append((row["id"], partido.iloc[0]["id"]))
+    df_entreno_partido = pd.DataFrame(entreno_partido, columns=["entrenamiento_id", "partido_id"])
+    df = df_asistencias.merge(df_entreno_partido, left_on="entrenamiento_id", right_on="entrenamiento_id", how="left")
+    df = df.merge(df_convocatorias, left_on=["partido_id", "jugador_id"], right_on=["partido_id", "jugador_id"], how="left")
+    df = df.merge(df_partidos[["id", "goles_favor","goles_contra"]], left_on="partido_id", right_on="id", how="left")
+    df["resultado"] = np.where(df["goles_favor"] > df["goles_contra"], "Gana",
+                               np.where(df["goles_favor"] < df["goles_contra"], "Pierde", "Empata"))
     return df
 
-@st.cache_data
-def load_minutos():
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM part_minutos", conn)
-    conn.close()
+def globales_temp(df_jugadores, df_partidos, df_part_minutos, df_asistencias):
+    min_totales = df_part_minutos.groupby("jugador_id")["minutos"].sum().reset_index(name="min_jugados")
+    asistencias = df_asistencias.groupby("jugador_id")["asiste"].mean().reset_index(name="asistencia_pct")
+    rpe = df_asistencias.groupby("jugador_id")["rpe"].mean().reset_index(name="rpe_media")
+    actitud = df_asistencias.groupby("jugador_id")["actitud"].mean().reset_index(name="actitud_media")
+    df = df_jugadores.merge(min_totales, left_on="id", right_on="jugador_id", how="left") \
+        .merge(asistencias, left_on="id", right_on="jugador_id", how="left") \
+        .merge(rpe, left_on="id", right_on="jugador_id", how="left") \
+        .merge(actitud, left_on="id", right_on="jugador_id", how="left")
+    df = df.fillna(0)
     return df
 
-@st.cache_data
-def load_acciones():
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM part_accion", conn)
-    conn.close()
-    return df
+def main():
+    st.title("Estadísticas de fútbol - Temporada completa (MySQL)")
+    dfs = load_data()
+    jugadores = dfs["jugadores"]
+    partidos = dfs["partidos"]
+    part_accion = dfs["part_accion"]
+    convocatorias = dfs["convocatorias"]
+    part_minutos = dfs["part_minutos"]
+    equipos = dfs["equipos"]
+    entrenamientos = dfs["entrenamientos_registro"]
+    asistencias = dfs["asistencias"]
 
-@st.cache_data
-def load_asistencias():
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM part_asistencias", conn)
-    conn.close()
-    return df
+    st.header("Estadísticas globales por partido")
+    partidos_df, partidos_resumen = partidos_stats(partidos)
+    st.dataframe(partidos_resumen)
+    st.bar_chart(partidos_resumen.set_index("resultado")["cantidad"])
 
-@st.cache_data
-def load_convocatorias():
-    conn = get_connection()
-    df = pd.read_sql("SELECT * FROM convocatorias", conn)
-    conn.close()
-    return df
+    st.header("Estadísticas por jugador (temporada y por partido)")
+    jugadores_df = jugador_stats(jugadores, part_minutos, part_accion, convocatorias, partidos)
+    st.dataframe(jugadores_df[["nombre","alias","dorsal","demarcacion","minutos_totales","porcentaje_min",
+                               "goles","asistencias","lesiones","amarillas","goles_encajados","valoracion_media","convocatorias"]])
 
-jugadores = load_jugadores()
-partidos = load_partidos()
-minutos = load_minutos()
-acciones = load_acciones()
-asistencias = load_asistencias()
-convocatorias = load_convocatorias()
+    st.header("Estadísticas por equipo")
+    equipos_df = equipo_stats(partidos)
+    st.dataframe(equipos_df)
 
-# Utilidad: partidos convocados por jugador
-partidos_convocados_jugador = convocatorias.groupby("jugador_id")["partido_id"].apply(set).to_dict()
+    st.header("Gráficas de jugadores")
+    fig1 = px.bar(jugadores_df, x="nombre", y="minutos_totales", title="Minutos jugados por jugador")
+    st.plotly_chart(fig1)
+    fig2 = px.bar(jugadores_df, x="nombre", y="goles", title="Goles por jugador")
+    st.plotly_chart(fig2)
+    fig3 = px.bar(jugadores_df, x="nombre", y="asistencias", title="Asistencias por jugador")
+    st.plotly_chart(fig3)
+    fig4 = px.bar(jugadores_df, x="nombre", y="porcentaje_min", title="Porcentaje minutos jugados por jugador")
+    st.plotly_chart(fig4)
 
-def filtrar_minutos(jugador_id):
-    if jugador_id in partidos_convocados_jugador:
-        ids_partidos = partidos_convocados_jugador[jugador_id]
-        return minutos[(minutos["jugador_id"] == jugador_id) & (minutos["partido_id"].isin(ids_partidos))]
-    else:
-        return pd.DataFrame(columns=minutos.columns)
+    st.header("Porcentaje de minutos jugados por partido y jugador")
+    min_por_part = part_minutos.groupby(["jugador_id","partido_id"])["minutos"].sum().reset_index()
+    partidos_min = partidos[["id","fecha"]]
+    min_por_part = min_por_part.merge(jugadores[["id","nombre"]], left_on="jugador_id", right_on="id", how="left") \
+                               .merge(partidos_min, left_on="partido_id", right_on="id", how="left")
+    st.dataframe(min_por_part[["nombre","partido_id","fecha","minutos"]])
 
-def filtrar_acciones(jugador_id, accion_tipo=None):
-    if jugador_id in partidos_convocados_jugador:
-        ids_partidos = partidos_convocados_jugador[jugador_id]
-        df = acciones[(acciones["jugador_id"] == jugador_id) & (acciones["partido_id"].isin(ids_partidos))]
-        if accion_tipo is not None:
-            df = df[df["accion"] == accion_tipo]
-        return df
-    else:
-        return pd.DataFrame(columns=acciones.columns)
+    st.header("Relación asistencia, RPE y actitud con resultados y valoración")
+    entreno_stats = asistencias_entreno_stats(asistencias, entrenamientos, convocatorias, partidos)
+    st.dataframe(entreno_stats[["jugador_id","asiste","rpe","actitud","valoracion","resultado"]])
+    fig5 = px.box(entreno_stats, x="resultado", y="rpe", points="all", title="RPE según resultado")
+    st.plotly_chart(fig5)
+    fig6 = px.box(entreno_stats, x="resultado", y="actitud", points="all", title="Actitud según resultado")
+    st.plotly_chart(fig6)
+    fig7 = px.box(entreno_stats, x="resultado", y="asiste", points="all", title="Asistencia a entrenos según resultado")
+    st.plotly_chart(fig7)
 
-def filtrar_asistencias(jugador_id):
-    if jugador_id in partidos_convocados_jugador:
-        ids_partidos = partidos_convocados_jugador[jugador_id]
-        return asistencias[(asistencias["asistente_id"] == jugador_id) & (asistencias["partido_id"].isin(ids_partidos))]
-    else:
-        return pd.DataFrame(columns=asistencias.columns)
+    st.header("Globales de temporada")
+    globales = globales_temp(jugadores, partidos, part_minutos, asistencias)
+    st.dataframe(globales)
 
-st.title("Informes y Estadísticas de Fútbol Base")
+    st.header("Otras estadísticas y porcentajes interesantes")
+    total_partidos = partidos["id"].nunique()
+    total_goles = partidos["goles_favor"].sum()
+    total_convocatorias = convocatorias["id"].count()
+    st.metric("Total de partidos", total_partidos)
+    st.metric("Total de goles a favor", total_goles)
+    st.metric("Total de convocatorias", total_convocatorias)
+    st.metric("Promedio de valoración", convocatorias["valoracion"].mean())
+    st.metric("Promedio de RPE temporada", asistencias["rpe"].mean())
+    st.metric("Promedio de actitud temporada", asistencias["actitud"].mean())
 
-vista = st.sidebar.radio("¿Qué deseas ver?", [
-    "Tablas comparativas del equipo",
-    "Informe individual por jugador",
-    "Gráficas"
-])
+    st.markdown("**Puedes filtrar, ordenar y exportar las tablas desde Streamlit.**")
 
-if vista == "Tablas comparativas del equipo":
-    st.header("Estadísticas globales (solo jugadores convocados)")
-
-    jugadores_convocados = convocatorias["jugador_id"].unique()
-    df_jug = jugadores[jugadores["id"].isin(jugadores_convocados)].copy()
-
-    # Solo partidos en los que el jugador ha sido convocado
-    minutos_totales = []
-    partidos_jugados = []
-    for _, row in df_jug.iterrows():
-        mins = filtrar_minutos(row["id"])
-        minutos_totales.append(mins["minutos"].sum())
-        partidos_jugados.append(len(mins["partido_id"].unique()))
-    df_jug["minutos"] = minutos_totales
-    df_jug["partidos_jugados"] = partidos_jugados
-
-    # Goles, asistencias, amonestaciones, lesiones solo de partidos convocados
-    df_jug["goles"] = df_jug["id"].apply(lambda x: filtrar_acciones(x, "gol").shape[0])
-    df_jug["asistencias"] = df_jug["id"].apply(lambda x: filtrar_asistencias(x).shape[0])
-    df_jug["amarillas"] = df_jug["id"].apply(lambda x: filtrar_acciones(x, "amarilla").shape[0])
-    df_jug["lesiones"] = df_jug["id"].apply(lambda x: filtrar_acciones(x, "lesion").shape[0])
-    df_jug["media_valoracion"] = df_jug["id"].apply(lambda x: convocatorias[convocatorias["jugador_id"] == x]["valoracion"].mean())
-
-    tabla_completa = df_jug[["nombre", "dorsal", "demarcacion", "minutos", "partidos_jugados", "goles", "asistencias", "amarillas", "lesiones", "media_valoracion"]].copy()
-    tabla_completa = tabla_completa.sort_values("minutos", ascending=False)
-    st.subheader("Estadísticas globales de jugadores convocados")
-    st.dataframe(tabla_completa, hide_index=True)
-
-    # Porcentajes y estadísticas
-    st.header("Estadísticas destacadas del equipo (convocados)")
-    total_min = tabla_completa["minutos"].sum()
-    total_gol = tabla_completa["goles"].sum()
-    total_asi = tabla_completa["asistencias"].sum()
-    total_ama = tabla_completa["amarillas"].sum()
-    total_les = tabla_completa["lesiones"].sum()
-    media_val = tabla_completa["media_valoracion"].mean()
-
-    st.metric("Minutos totales jugados", int(total_min))
-    st.metric("Goles totales", int(total_gol))
-    st.metric("Asistencias totales", int(total_asi))
-    st.metric("Amonestaciones totales", int(total_ama))
-    st.metric("Lesiones totales", int(total_les))
-    st.metric("Valoración media (convocados)", round(media_val,2))
-
-    # Porcentaje de minutos, goles y asistencias por jugador
-    st.subheader("Porcentaje de minutos jugados por jugador")
-    tabla_completa["% minutos"] = tabla_completa["minutos"] / total_min * 100 if total_min > 0 else 0
-    st.dataframe(tabla_completa[["nombre", "minutos", "% minutos"]].sort_values("% minutos", ascending=False), hide_index=True)
-
-    st.subheader("Porcentaje de goles por jugador")
-    if total_gol > 0:
-        tabla_completa["% goles"] = tabla_completa["goles"] / total_gol * 100
-        st.dataframe(tabla_completa[["nombre", "goles", "% goles"]].sort_values("% goles", ascending=False), hide_index=True)
-
-elif vista == "Informe individual por jugador":
-    jugadores_convocados = convocatorias["jugador_id"].unique()
-    jugador_sel = st.sidebar.selectbox("Selecciona un jugador", jugadores[jugadores["id"].isin(jugadores_convocados)]["nombre"])
-    jugador_id = jugadores[jugadores["nombre"] == jugador_sel]["id"].values[0]
-    st.header(f"Informe individual de {jugador_sel}")
-
-    # Solo partidos convocado
-    partidos_convocados = partidos_convocados_jugador.get(jugador_id, set())
-    min_jug = minutos[(minutos["jugador_id"] == jugador_id) & (minutos["partido_id"].isin(partidos_convocados))]
-    min_por_part = min_jug.groupby("partido_id")["minutos"].sum().reset_index()
-    min_por_part = min_por_part.merge(partidos[["id", "fecha"]], left_on="partido_id", right_on="id", how="left")
-    st.subheader("Minutos jugados por partido (solo partidos convocado)")
-    st.dataframe(min_por_part[["fecha", "minutos"]], hide_index=True)
-
-    # Acciones por partido
-    goles_jug = filtrar_acciones(jugador_id, "gol")
-    asist_jug = filtrar_asistencias(jugador_id)
-    amos_jug = filtrar_acciones(jugador_id, "amarilla")
-    les_jug = filtrar_acciones(jugador_id, "lesion")
-    val_jug = convocatorias[convocatorias["jugador_id"] == jugador_id]["valoracion"].mean()
-
-    tabla_ind = min_por_part[["fecha", "minutos"]].copy()
-    tabla_ind["goles"] = tabla_ind["fecha"].apply(
-        lambda f: goles_jug[goles_jug["partido_id"] == partidos[partidos["fecha"] == f]["id"].iloc[0]].shape[0] if not partidos[partidos["fecha"] == f].empty else 0
-    )
-    tabla_ind["asistencias"] = tabla_ind["fecha"].apply(
-        lambda f: asist_jug[asist_jug["partido_id"] == partidos[partidos["fecha"] == f]["id"].iloc[0]].shape[0] if not partidos[partidos["fecha"] == f].empty else 0
-    )
-    tabla_ind["amarillas"] = tabla_ind["fecha"].apply(
-        lambda f: amos_jug[amos_jug["partido_id"] == partidos[partidos["fecha"] == f]["id"].iloc[0]].shape[0] if not partidos[partidos["fecha"] == f].empty else 0
-    )
-    tabla_ind["lesiones"] = tabla_ind["fecha"].apply(
-        lambda f: les_jug[les_jug["partido_id"] == partidos[partidos["fecha"] == f]["id"].iloc[0]].shape[0] if not partidos[partidos["fecha"] == f].empty else 0
-    )
-    st.subheader("Tabla comparativa individual por partido (solo convocado)")
-    st.dataframe(tabla_ind, hide_index=True)
-
-    # Resumen global
-    total_min = min_jug["minutos"].sum()
-    total_gol = goles_jug.shape[0]
-    total_asi = asist_jug.shape[0]
-    total_ama = amos_jug.shape[0]
-    total_les = les_jug.shape[0]
-
-    st.markdown("### Resumen global")
-    st.table(pd.DataFrame({
-        "Estadística": ["Minutos jugados", "Goles", "Asistencias", "Amonestaciones", "Lesiones", "Valoración media"],
-        "Total": [total_min, total_gol, total_asi, total_ama, total_les, round(val_jug,2) if not pd.isna(val_jug) else "-"]
-    }))
-
-    # Porcentajes individuales
-    if total_min > 0:
-        st.metric("Goles por minuto jugado (%)", round(100*total_gol/total_min,2) if total_gol > 0 else 0)
-        st.metric("Asistencias por minuto jugado (%)", round(100*total_asi/total_min,2) if total_asi > 0 else 0)
-
-elif vista == "Gráficas":
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-
-    jugadores_convocados = convocatorias["jugador_id"].unique()
-    df_jug = jugadores[jugadores["id"].isin(jugadores_convocados)].copy()
-
-    st.header("Gráficas de estadísticas (solo convocados)")
-    graf = st.selectbox("Selecciona gráfica", [
-        "Minutos jugados por jugador (temporada convocados)",
-        "Goles y asistencias por jugador (temporada convocados)",
-        "Minutos jugados por partido (solo convocados)",
-        "Goles y asistencias por partido (jugador individual convocado)"
-    ])
-
-    if graf == "Minutos jugados por jugador (temporada convocados)":
-        data = []
-        for _, row in df_jug.iterrows():
-            mins = filtrar_minutos(row["id"])
-            data.append({"jugador": row["nombre"], "minutos": mins["minutos"].sum()})
-        tabla = pd.DataFrame(data).sort_values("minutos", ascending=False)
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sns.barplot(x="minutos", y="jugador", data=tabla, palette="Blues_r", ax=ax)
-        ax.set_xlabel("Minutos totales jugados")
-        ax.set_ylabel("Jugador")
-        st.pyplot(fig)
-
-    elif graf == "Goles y asistencias por jugador (temporada convocados)":
-        data = []
-        for _, row in df_jug.iterrows():
-            goles = filtrar_acciones(row["id"], "gol").shape[0]
-            asist = filtrar_asistencias(row["id"]).shape[0]
-            data.append({"jugador": row["nombre"], "goles": goles, "asistencias": asist})
-        df = pd.DataFrame(data).set_index("jugador")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        df.plot(kind="bar", ax=ax)
-        plt.xticks(rotation=45)
-        ax.set_ylabel("Total")
-        st.pyplot(fig)
-
-    elif graf == "Minutos jugados por partido (solo convocados)":
-        # Suma minutos por partido y jugador solo si convocado en ese partido
-        lista = []
-        for _, row in df_jug.iterrows():
-            mins = filtrar_minutos(row["id"])
-            for _, m in mins.iterrows():
-                fecha = partidos[partidos["id"] == m["partido_id"]]["fecha"]
-                if not fecha.empty:
-                    lista.append({"fecha": fecha.iloc[0], "jugador": row["nombre"], "minutos": m["minutos"]})
-        tabla = pd.DataFrame(lista)
-        if not tabla.empty:
-            tabla_pivot = tabla.pivot_table(index="fecha", columns="jugador", values="minutos", fill_value=0)
-            st.dataframe(tabla_pivot, hide_index=True)
-            fig, ax = plt.subplots(figsize=(12, 6))
-            tabla_pivot.plot(ax=ax)
-            plt.xticks(rotation=45)
-            ax.set_ylabel("Minutos")
-            ax.legend(loc="upper right", bbox_to_anchor=(1.15, 1))
-            st.pyplot(fig)
-        else:
-            st.info("No hay datos para mostrar.")
-
-    elif graf == "Goles y asistencias por partido (jugador individual convocado)":
-        jugador_sel = st.selectbox("Selecciona jugador", df_jug["nombre"])
-        jugador_id = df_jug[df_jug["nombre"] == jugador_sel]["id"].values[0]
-        partidos_convocados = partidos_convocados_jugador.get(jugador_id, set())
-        goles_jug = filtrar_acciones(jugador_id, "gol")
-        asist_jug = filtrar_asistencias(jugador_id)
-        fechas = partidos[partidos["id"].isin(partidos_convocados)]["fecha"].astype(str).tolist()
-        df = pd.DataFrame({"fecha": fechas})
-        df["goles"] = df["fecha"].apply(
-            lambda f: goles_jug[goles_jug["partido_id"] == partidos[partidos["fecha"] == f]["id"].iloc[0]].shape[0] if not partidos[partidos["fecha"] == f].empty else 0
-        )
-        df["asistencias"] = df["fecha"].apply(
-            lambda f: asist_jug[asist_jug["partido_id"] == partidos[partidos["fecha"] == f]["id"].iloc[0]].shape[0] if not partidos[partidos["fecha"] == f].empty else 0
-        )
-        fig, ax = plt.subplots()
-        ax.plot(df["fecha"], df["goles"], marker="o", label="Goles")
-        ax.plot(df["fecha"], df["asistencias"], marker="s", label="Asistencias")
-        plt.xticks(rotation=45)
-        ax.set_ylabel("Total")
-        ax.legend()
-        st.pyplot(fig)
-
-st.sidebar.markdown("---")
-st.sidebar.info("App desarrollada por Coditeca para TFG - Fútbol Base")
+if __name__ == "__main__":
+    main()
