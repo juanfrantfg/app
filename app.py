@@ -117,7 +117,7 @@ def globales_temp(jugadores, partidos, part_minutos, asistencias):
     return df
 
 def main():
-    st.title("Estadísticas de fútbol - Temporada completa (MySQL)")
+    st.title("Estadísticas del equipo - Temporada completa")
     dfs = load_data()
     jugadores = dfs["jugadores"]
     partidos = dfs["partidos"]
