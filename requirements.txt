@@ -3,3 +3,5 @@ pandas
 numpy
 plotly
 mysql-connector-python
+matplotlib
+seaborn
