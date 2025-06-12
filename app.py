@@ -6,10 +6,10 @@ import plotly.express as px
 
 # CONFIGURAR AQUÍ TUS DATOS DE CONEXIÓN
 DB_CONFIG = {
-        host="185.14.58.24",
-        user="tfgusu",
-        password="t2V#zYufaA1^9crh",
-        database="apptfg"
+    "host": "185.14.58.24",
+    "user": "root",
+    "password": "t2V#zYufaA1^9crh",
+    "database": "apptfg"
 }
 
 @st.cache_data(ttl=600)
