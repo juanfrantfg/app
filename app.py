@@ -4,13 +4,14 @@ import numpy as np
 import mysql.connector
 import plotly.express as px
 
-# CONFIGURAR AQUÍ TUS DATOS DE CONEXIÓN
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "",  # pon tu contraseña
-    "database": "apptfg"
-}
+# CONEXIÓN BD
+def get_connection():
+    return mysql.connector.connect(
+        host="185.14.58.24",
+        user="tfgusu",
+        password="t2V#zYufaA1^9crh",
+        database="apptfg"
+    )
 
 @st.cache_data(ttl=600)
 def load_data():
