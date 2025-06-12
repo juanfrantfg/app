@@ -76,7 +76,6 @@ def jugador_stats(jugadores, part_minutos, part_accion, convocatorias, partidos)
     return df
 
 def asistencias_entreno_stats(asistencias, entrenamientos, convocatorias, partidos, jugadores):
-    # Relacionar cada asistencia con el jugador (nombre, alias, dorsal) y resultado del partido más cercano
     entreno_partido = []
     for idx, row in entrenamientos.iterrows():
         fecha = row["fecha"]
@@ -87,10 +86,13 @@ def asistencias_entreno_stats(asistencias, entrenamientos, convocatorias, partid
     df = asistencias.merge(df_entreno_partido, left_on="entrenamiento_id", right_on="entrenamiento_id", how="left")
     df = df.merge(convocatorias, left_on=["partido_id", "jugador_id"], right_on=["partido_id", "jugador_id"], how="left")
     df = df.merge(partidos[["id", "goles_favor", "goles_contra"]], left_on="partido_id", right_on="id", how="left")
+    # Elimina columna "id" para evitar conflicto al mergear con jugadores
+    if "id" in df.columns:
+        df = df.drop(columns=["id"])
     df = df.merge(jugadores[["id", "nombre", "alias", "dorsal"]], left_on="jugador_id", right_on="id", how="left")
     df["resultado"] = np.where(df["goles_favor"] > df["goles_contra"], "Gana",
                                np.where(df["goles_favor"] < df["goles_contra"], "Pierde", "Empata"))
-    # Solo mostramos info relevante y no jugador_id
+    # Solo mostramos info relevante y no jugador_id ni id
     df = df[["nombre", "alias", "dorsal", "asiste", "rpe", "actitud", "valoracion", "resultado"]]
     return df
 
