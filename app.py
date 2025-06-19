@@ -146,7 +146,7 @@ def partidos_por_fecha(partidos):
     return df
 
 def main():
-    st.title("Estadísticas de fútbol - Temporada completa (MySQL)")
+    st.title("Estadísticas de fútbol - Temporada completa")
     dfs = load_data()
     jugadores = dfs["jugadores"]
     partidos = dfs["partidos"]
@@ -241,8 +241,6 @@ def main():
     st.metric("Promedio de valoración", f"{convocatorias['valoracion'].mean():.2f}")
     st.metric("Promedio de RPE temporada", f"{asistencias['rpe'].mean():.2f}")
     st.metric("Promedio de actitud temporada", f"{asistencias['actitud'].mean():.2f}")
-
-    st.markdown("**Todos los porcentajes se muestran con dos decimales y el símbolo %. Todos los números están redondeados a dos decimales.**")
 
 if __name__ == "__main__":
     main()
