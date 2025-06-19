@@ -61,11 +61,14 @@ def jugador_stats(jugadores, part_minutos, part_accion, convocatorias, partidos)
         .merge(goles_encajados, on="jugador_id", how="left")
 
     df = df.fillna(0)
+    # Redondear todos los números a dos decimales
+    for col in ["minutos_totales", "goles", "asistencias", "lesiones", "amarillas", "goles_encajados", "valoracion_media", "convocatorias", "partidos_jugados"]:
+        df[col] = df[col].astype(float).map(lambda x: f"{x:.2f}")
     # Formatear porcentaje_min con dos decimales y símbolo %
     df["porcentaje_min"] = df["porcentaje_min"].map(lambda x: f"{x:.2f} %")
     df = df[["nombre", "alias", "dorsal", "demarcacion",
              "minutos_totales", "porcentaje_min", "goles", "asistencias",
-             "lesiones", "amarillas", "goles_encajados", "valoracion_media", "convocatorias"]]
+             "lesiones", "amarillas", "goles_encajados", "valoracion_media", "convocatorias", "partidos_jugados"]]
     return df
 
 def asistencias_entreno_stats(asistencias, entrenamientos, convocatorias, partidos, jugadores):
@@ -88,6 +91,11 @@ def asistencias_entreno_stats(asistencias, entrenamientos, convocatorias, partid
     # Si asiste es porcentaje (0/1), lo transformamos a %
     if df["asiste"].max() <= 1:
         df["asiste"] = (df["asiste"] * 100).map(lambda x: f"{x:.2f} %")
+    else:
+        df["asiste"] = df["asiste"].map(lambda x: f"{x:.2f} %")
+    # Redondear rpe, actitud, valoracion a dos decimales
+    for col in ["rpe", "actitud", "valoracion"]:
+        df[col] = df[col].astype(float).map(lambda x: f"{x:.2f}")
     return df
 
 def globales_temp(jugadores, partidos, part_minutos, asistencias):
@@ -111,7 +119,30 @@ def globales_temp(jugadores, partidos, part_minutos, asistencias):
         df["asistencia_pct"] = (df["asistencia_pct"] * 100).map(lambda x: f"{x:.2f} %")
     else:
         df["asistencia_pct"] = df["asistencia_pct"].map(lambda x: f"{x:.2f} %")
+    # Redondear min_jugados, rpe_media, actitud_media a dos decimales
+    for col in ["min_jugados", "rpe_media", "actitud_media"]:
+        df[col] = df[col].astype(float).map(lambda x: f"{x:.2f}")
     df = df[["nombre", "alias", "dorsal", "min_jugados", "asistencia_pct", "rpe_media", "actitud_media"]]
+    return df
+
+def equipo_stats(partidos, equipos):
+    equipos_df = partidos.groupby("equipo_id").agg({
+        "goles_favor":"sum",
+        "goles_contra":"sum",
+        "id":"count"
+    }).rename(columns={"id":"partidos"}).reset_index()
+    equipos_df = equipos_df.merge(equipos, left_on="equipo_id", right_on="id", how="left")
+    equipos_df = equipos_df[["nombre", "partidos", "goles_favor", "goles_contra"]]
+    # Redondear todos los números a dos decimales
+    for col in ["partidos", "goles_favor", "goles_contra"]:
+        equipos_df[col] = equipos_df[col].astype(float).map(lambda x: f"{x:.2f}")
+    return equipos_df
+
+def partidos_por_fecha(partidos):
+    df = partidos.copy()
+    df["goles_favor"] = df["goles_favor"].astype(float).map(lambda x: f"{x:.2f}")
+    df["goles_contra"] = df["goles_contra"].astype(float).map(lambda x: f"{x:.2f}")
+    df = df[["fecha", "goles_favor", "goles_contra"]]
     return df
 
 def main():
@@ -128,55 +159,73 @@ def main():
 
     st.header("Estadísticas globales por partido")
     partidos_df, partidos_resumen = partidos_stats(partidos)
+    # Redondear cantidad a dos decimales aunque sean enteros
+    partidos_resumen["cantidad"] = partidos_resumen["cantidad"].astype(float).map(lambda x: f"{x:.2f}")
     st.dataframe(partidos_resumen)
-    st.bar_chart(partidos_resumen.set_index("resultado")["cantidad"])
+    fig1 = px.bar(partidos_resumen, x="resultado", y="cantidad", title="Cantidad de partidos por resultado")
+    st.plotly_chart(fig1)
 
     st.header("Estadísticas por jugador (temporada y por partido)")
     jugadores_df = jugador_stats(jugadores, part_minutos, part_accion, convocatorias, partidos)
     st.dataframe(jugadores_df)
 
+    # Mostrar partidos jugados por jugador
+    st.subheader("Partidos jugados por jugador")
+    fig_pj = px.bar(jugadores_df, x="nombre", y="partidos_jugados", title="Partidos jugados por jugador", labels={"partidos_jugados": "Partidos jugados"})
+    st.plotly_chart(fig_pj)
+
     st.header("Estadísticas por equipo")
-    equipos_df = partidos.groupby("equipo_id").agg({
-        "goles_favor":"sum",
-        "goles_contra":"sum",
-        "id":"count"
-    }).rename(columns={"id":"partidos"}).reset_index()
+    equipos_df = equipo_stats(partidos, equipos)
     st.dataframe(equipos_df)
+    fig2 = px.bar(equipos_df, x="nombre", y="goles_favor", title="Goles a favor por equipo")
+    st.plotly_chart(fig2)
+    fig3 = px.bar(equipos_df, x="nombre", y="goles_contra", title="Goles en contra por equipo")
+    st.plotly_chart(fig3)
 
     st.header("Gráficas de jugadores")
-    fig1 = px.bar(jugadores_df, x="nombre", y="minutos_totales", title="Minutos jugados por jugador")
-    st.plotly_chart(fig1)
-    fig2 = px.bar(jugadores_df, x="nombre", y="goles", title="Goles por jugador")
-    st.plotly_chart(fig2)
-    fig3 = px.bar(jugadores_df, x="nombre", y="asistencias", title="Asistencias por jugador")
-    st.plotly_chart(fig3)
-    # Para mostrar porcentaje en la gráfica, debemos convertir a float primero (quita el % para la gráfica)
+    # Convertir columnas a float para poder graficar
     jugadores_df_plot = jugadores_df.copy()
+    jugadores_df_plot["minutos_totales"] = jugadores_df_plot["minutos_totales"].astype(float)
+    jugadores_df_plot["goles"] = jugadores_df_plot["goles"].astype(float)
+    jugadores_df_plot["asistencias"] = jugadores_df_plot["asistencias"].astype(float)
     jugadores_df_plot["porcentaje_min"] = jugadores_df_plot["porcentaje_min"].str.replace(" %","").astype(float)
-    fig4 = px.bar(jugadores_df_plot, x="nombre", y="porcentaje_min", title="Porcentaje minutos jugados por jugador",
-                  labels={"porcentaje_min": "Porcentaje minutos jugados (%)"})
+    fig4 = px.bar(jugadores_df_plot, x="nombre", y="minutos_totales", title="Minutos jugados por jugador")
     st.plotly_chart(fig4)
+    fig5 = px.bar(jugadores_df_plot, x="nombre", y="goles", title="Goles por jugador")
+    st.plotly_chart(fig5)
+    fig6 = px.bar(jugadores_df_plot, x="nombre", y="asistencias", title="Asistencias por jugador")
+    st.plotly_chart(fig6)
+    fig7 = px.bar(jugadores_df_plot, x="nombre", y="porcentaje_min", title="Porcentaje minutos jugados por jugador",
+                  labels={"porcentaje_min": "Porcentaje minutos jugados (%)"})
+    st.plotly_chart(fig7)
 
     st.header("Porcentaje de minutos jugados por partido y jugador")
     min_por_part = part_minutos.groupby(["jugador_id","partido_id"])["minutos"].sum().reset_index()
     min_por_part = min_por_part.merge(jugadores[["id","nombre","alias","dorsal"]], left_on="jugador_id", right_on="id", how="left")
     min_por_part = min_por_part.merge(partidos[["id","fecha"]], left_on="partido_id", right_on="id", how="left")
+    min_por_part["minutos"] = min_por_part["minutos"].astype(float).map(lambda x: f"{x:.2f}")
     st.dataframe(min_por_part[["nombre","alias","dorsal","partido_id","fecha","minutos"]])
+
+    # Tabla adicional: partidos por fecha
+    st.subheader("Resultados por partido (fecha)")
+    partidos_fecha = partidos_por_fecha(partidos)
+    st.dataframe(partidos_fecha)
 
     st.header("Relación asistencia, RPE y actitud con resultados y valoración")
     entreno_stats = asistencias_entreno_stats(asistencias, entrenamientos, convocatorias, partidos, jugadores)
     st.dataframe(entreno_stats)
-    fig5 = px.box(entreno_stats, x="resultado", y="rpe", points="all", title="RPE según resultado")
-    st.plotly_chart(fig5)
-    fig6 = px.box(entreno_stats, x="resultado", y="actitud", points="all", title="Actitud según resultado")
-    st.plotly_chart(fig6)
-    # Para la gráfica de asistencia, quitar el símbolo % para plotear
     entreno_stats_plot = entreno_stats.copy()
     if entreno_stats_plot["asiste"].dtype == object:
         entreno_stats_plot["asiste"] = entreno_stats_plot["asiste"].str.replace(" %","").astype(float)
-    fig7 = px.box(entreno_stats_plot, x="resultado", y="asiste", points="all", title="Asistencia a entrenos según resultado",
-                  labels={"asiste": "Asistencia (%)"})
-    st.plotly_chart(fig7)
+    entreno_stats_plot["rpe"] = entreno_stats_plot["rpe"].astype(float)
+    entreno_stats_plot["actitud"] = entreno_stats_plot["actitud"].astype(float)
+    # Solo gráficas de barras (no boxplot)
+    fig8 = px.bar(entreno_stats_plot.groupby("resultado")["asiste"].mean().reset_index(), x="resultado", y="asiste", title="Asistencia media a entrenos según resultado", labels={"asiste": "Asistencia media (%)"})
+    st.plotly_chart(fig8)
+    fig9 = px.bar(entreno_stats_plot.groupby("resultado")["rpe"].mean().reset_index(), x="resultado", y="rpe", title="RPE medio según resultado")
+    st.plotly_chart(fig9)
+    fig10 = px.bar(entreno_stats_plot.groupby("resultado")["actitud"].mean().reset_index(), x="resultado", y="actitud", title="Actitud media según resultado")
+    st.plotly_chart(fig10)
 
     st.header("Globales de temporada")
     globales = globales_temp(jugadores, partidos, part_minutos, asistencias)
@@ -186,14 +235,14 @@ def main():
     total_partidos = partidos["id"].nunique()
     total_goles = partidos["goles_favor"].sum()
     total_convocatorias = convocatorias["id"].count()
-    st.metric("Total de partidos", total_partidos)
-    st.metric("Total de goles a favor", total_goles)
-    st.metric("Total de convocatorias", total_convocatorias)
-    st.metric("Promedio de valoración", convocatorias["valoracion"].mean())
-    st.metric("Promedio de RPE temporada", asistencias["rpe"].mean())
-    st.metric("Promedio de actitud temporada", asistencias["actitud"].mean())
+    st.metric("Total de partidos", f"{total_partidos:.2f}")
+    st.metric("Total de goles a favor", f"{total_goles:.2f}")
+    st.metric("Total de convocatorias", f"{total_convocatorias:.2f}")
+    st.metric("Promedio de valoración", f"{convocatorias['valoracion'].mean():.2f}")
+    st.metric("Promedio de RPE temporada", f"{asistencias['rpe'].mean():.2f}")
+    st.metric("Promedio de actitud temporada", f"{asistencias['actitud'].mean():.2f}")
 
-    st.markdown("**Todos los porcentajes se muestran con dos decimales y el símbolo %.**")
+    st.markdown("**Todos los porcentajes se muestran con dos decimales y el símbolo %. Todos los números están redondeados a dos decimales.**")
 
 if __name__ == "__main__":
     main()
